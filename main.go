@@ -8,7 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"time"
-	"./storage"
+	"github.com/xfreshx/lifland/storage"
 )
 
 func main() {
@@ -37,7 +37,7 @@ func main() {
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil {
-			log.Fatal("Unable to start server: %v", err)
+			log.Fatal("Unable to start server: " + err.Error())
 		}
 	}()
 

@@ -1,9 +1,7 @@
 package storage
 
 import (
-	"../types"
-	"bytes"
-	"encoding/gob"
+	"github.com/xfreshx/lifland/types"
 	"errors"
 	"github.com/dgraph-io/badger"
 	"log"
@@ -59,13 +57,12 @@ func (s *store) Close() {
 
 func (s *store) SetTournament(t *types.Tournament) error {
 	return s.db.Update(func(txn *badger.Txn) error {
-		var b bytes.Buffer
-		e := gob.NewEncoder(&b)
-		if err := e.Encode(t); err != nil {
+		b, err := t.ToBytes()
+		if err != nil {
 			return err
 		}
 
-		return txn.Set([]byte("tournament"+t.Id), b.Bytes())
+		return txn.Set([]byte("tournament"+t.Id), b)
 	})
 }
 
@@ -82,13 +79,7 @@ func (s *store) GetTournament(id string) (*types.Tournament, error) {
 			return err
 		}
 
-		b := bytes.NewBuffer(val)
-		d := gob.NewDecoder(b)
-		if err := d.Decode(&t); err != nil {
-			return err
-		}
-
-		return nil
+		return t.FromBytes(val)
 	})
 
 	if err != nil && err == badger.ErrKeyNotFound {
@@ -104,15 +95,38 @@ func (s *store) DeleteTournament(id string) error {
 	})
 }
 
-func (s *store) SetPlayer(p *types.Player) error {
-	return s.db.Update(func(txn *badger.Txn) error {
-		var b bytes.Buffer
-		e := gob.NewEncoder(&b)
-		if err := e.Encode(p); err != nil {
+func (s *store) SetMultiPlayer(pp ...*types.Player) error {
+	txn := s.db.NewTransaction(true)
+	defer txn.Discard()
+
+
+	for _, p := range pp {
+		b, err := p.ToBytes()
+		if err != nil {
 			return err
 		}
 
-		return txn.Set([]byte("player"+p.Id), b.Bytes())
+		err = txn.Set([]byte("player"+p.Id), b)
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := txn.Commit(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *store) SetPlayer(p *types.Player) error {
+	return s.db.Update(func(txn *badger.Txn) error {
+		b, err := p.ToBytes()
+		if err != nil {
+			return err
+		}
+
+		return txn.Set([]byte("player"+p.Id), b)
 	})
 }
 
@@ -129,13 +143,7 @@ func (s *store) GetPlayer(id string) (*types.Player, error) {
 			return err
 		}
 
-		b := bytes.NewBuffer(val)
-		d := gob.NewDecoder(b)
-		if err := d.Decode(&p); err != nil {
-			return err
-		}
-
-		return nil
+		return p.FromBytes(val)
 	})
 
 	if err != nil && err == badger.ErrKeyNotFound {
@@ -143,37 +151,4 @@ func (s *store) GetPlayer(id string) (*types.Player, error) {
 	}
 
 	return &p, err
-}
-
-func (s *store) SafeBack(player, backer *types.Player) error {
-
-	txn := s.db.NewTransaction(true)
-	defer txn.Discard()
-
-	var pBuf, bBuf bytes.Buffer
-	e := gob.NewEncoder(&pBuf)
-	if err := e.Encode(player); err != nil {
-		return err
-	}
-
-	err := txn.Set([]byte("player" + player.Id), pBuf.Bytes())
-	if err != nil {
-		return err
-	}
-
-	e = gob.NewEncoder(&bBuf)
-	if err := e.Encode(backer); err != nil {
-		return err
-	}
-
-	err = txn.Set([]byte("player" + backer.Id), bBuf.Bytes())
-	if err != nil {
-		return err
-	}
-
-	if err := txn.Commit(); err != nil {
-		return err
-	}
-
-	return nil
 }

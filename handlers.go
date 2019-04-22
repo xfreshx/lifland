@@ -1,11 +1,13 @@
 package main
 
 import (
-	"./storage"
-	"./types"
+	"github.com/xfreshx/lifland/storage"
+	"github.com/xfreshx/lifland/types"
+	"github.com/xfreshx/lifland/utils"
 	"encoding/json"
+	"errors"
+	"log"
 	"net/http"
-	"strconv"
 )
 
 func RootHandler(w http.ResponseWriter, r *http.Request) {
@@ -13,59 +15,66 @@ func RootHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func TakeHandler(w http.ResponseWriter, r *http.Request) {
-	if !methodAllowed(w, r, http.MethodGet) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 
 	params := r.URL.Query()
-	playerId := params.Get("playerId")
-	points := params.Get("points")
 
-	if playerId == "" || points == "" {
-		errorHandler(w, http.StatusBadRequest, "invalid params given: " + playerId + " " + points)
+	playerId, err := utils.GetStringURLParam(params, "playerId")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		log.Println("invalid playerId given")
 		return
 	}
 
-	uPoints, err := strconv.ParseUint(points, 10, 64)
+	points, err := utils.GetUintURLParam(params, "points")
 	if err != nil {
-		errorHandler(w, http.StatusBadRequest, "invalid points given: " + points)
+		w.WriteHeader(http.StatusBadRequest)
+		log.Println("invalid points given")
 		return
 	}
 
 	p, err := storage.GetConn().GetPlayer(playerId)
 	if err != nil {
-		errorHandler(w, http.StatusInternalServerError, err.Error())
-	}
-
-	if p.Points >= uPoints {
-		p.Points -= uPoints
-	} else {
-		errorHandler(w, http.StatusInternalServerError, "not enough points")
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Println(err.Error())
 		return
 	}
 
+	err = takePlayer(p, points)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Println(err.Error())
+	}
+
 	if err = storage.GetConn().SetPlayer(p); err != nil {
-		errorHandler(w, http.StatusInternalServerError, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Println(err.Error())
+		return
 	}
 }
 
 func FundHandler(w http.ResponseWriter, r *http.Request) {
-	if !methodAllowed(w, r, http.MethodGet) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 
 	params := r.URL.Query()
-	playerId := params.Get("playerId")
-	points := params.Get("points")
 
-	if playerId == "" || points == "" {
-		errorHandler(w, http.StatusBadRequest, "invalid params given: " + playerId + " " + points)
+	playerId, err := utils.GetStringURLParam(params, "playerId")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		log.Println("invalid playerId given")
 		return
 	}
 
-	uPoints, err := strconv.ParseUint(points, 10, 64)
+	points, err := utils.GetUintURLParam(params, "points")
 	if err != nil {
-		errorHandler(w, http.StatusBadRequest, "invalid points given: " + points)
+		w.WriteHeader(http.StatusBadRequest)
+		log.Println("invalid points given")
 		return
 	}
 
@@ -74,130 +83,159 @@ func FundHandler(w http.ResponseWriter, r *http.Request) {
 		if err == storage.ErrNoPlayer {
 			p = &types.Player{
 				Id: playerId,
+				Backers: make(map[string]bool),
 			}
+			log.Println("no such player, will be created")
 		} else {
-			errorHandler(w, http.StatusInternalServerError, err.Error())
+			w.WriteHeader(http.StatusInternalServerError)
+			log.Println(err.Error())
 			return
 		}
 	}
 
-	p.Points += uPoints
+	p.Points += points
 
 	if err = storage.GetConn().SetPlayer(p); err != nil {
-		errorHandler(w, http.StatusInternalServerError, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Println(err.Error())
+		return
 	}
 }
 
 func AnnounceTournamentHandler(w http.ResponseWriter, r *http.Request) {
-	if !methodAllowed(w, r, http.MethodGet) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 
 	params := r.URL.Query()
-	tournamentId := params.Get("tournamentId")
-	deposit := params.Get("deposit")
 
-	if tournamentId == "" || deposit == "" {
-		errorHandler(w, http.StatusBadRequest, "invalid params given: " + tournamentId + " " + deposit)
-		return
-	}
-
-	uDeposit, err := strconv.ParseUint(deposit, 10, 64)
+	tournamentId, err := utils.GetStringURLParam(params, "tournamentId")
 	if err != nil {
-		errorHandler(w, http.StatusBadRequest, "invalid deposit given: " + deposit)
+		w.WriteHeader(http.StatusBadRequest)
+		log.Println("invalid tournamentId given")
 		return
 	}
 
-	if uDeposit == 0 {
-		errorHandler(w, http.StatusBadRequest, "invalid deposit given: " + deposit)
+	deposit, err := utils.GetUintURLParam(params, "deposit")
+	if err != nil || deposit == 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		log.Println("invalid deposit given")
 		return
 	}
 
 	t := &types.Tournament{
 		Id: tournamentId,
-		Deposit: uDeposit,
-		Players: make(map[string]*types.Player),
+		Deposit: deposit,
 	}
 
 	if err = storage.GetConn().SetTournament(t); err != nil {
-		errorHandler(w, http.StatusInternalServerError, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Println(err.Error())
 	}
 }
 
 func JoinTournamentHandler(w http.ResponseWriter, r *http.Request) {
-	if !methodAllowed(w, r, http.MethodGet) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 
 	params := r.URL.Query()
-	tournamentId := params.Get("tournamentId")
-	playerId := params.Get("playerId")
 
-	if playerId == "" || tournamentId == "" {
-		errorHandler(w, http.StatusBadRequest, "invalid params given: " + playerId + " " + tournamentId)
+	tournamentId, err := utils.GetStringURLParam(params, "tournamentId")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		log.Println("invalid tournamentId given")
+		return
+	}
+
+	playerId, err := utils.GetStringURLParam(params, "playerId")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		log.Println("invalid playerId given")
 		return
 	}
 
 	t, err := storage.GetConn().GetTournament(tournamentId)
 	if err != nil {
-		errorHandler(w, http.StatusInternalServerError, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Println(err.Error())
 		return
 	}
 
 	p, err := storage.GetConn().GetPlayer(playerId)
 	if err != nil {
-		errorHandler(w, http.StatusInternalServerError, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Println(err.Error())
 		return
 	}
 
 	if p.Points < t.Deposit {
 		backers, ok := params["backerId"]
 		if !ok {
-			errorHandler(w, http.StatusBadRequest, "player has insufficient score and no backers provided")
+			w.WriteHeader(http.StatusBadRequest)
+			log.Println("player has insufficient score and no backers provided")
 			return
 		}
 
+		// share deposit among all backers + a player himself
 		pointsPerBacker := t.Deposit / uint64(len(backers) + 1)
 
 		for _, backerId := range backers {
+
 			b, err := storage.GetConn().GetPlayer(backerId)
 			if err != nil {
-				errorHandler(w, http.StatusInternalServerError, err.Error())
+				w.WriteHeader(http.StatusInternalServerError)
+				log.Println(err.Error())
 				return
 			}
 
-			if b.Points < pointsPerBacker {
-				errorHandler(w, http.StatusInternalServerError, "backer " + backerId + " has insufficient funds")
-				return
-			}
-
-			p.Backers = append(p.Backers, backerId)
-
-			b.Points -= pointsPerBacker
-			p.Points += pointsPerBacker
-
-			err = storage.GetConn().SafeBack(p, b)
+			err = takePlayer(b, pointsPerBacker)
 			if err != nil {
-				errorHandler(w, http.StatusInternalServerError, err.Error())
+				w.WriteHeader(http.StatusInternalServerError)
+				log.Println(err.Error())
+				return
+			}
+
+			p.Points += pointsPerBacker
+			p.Backers[backerId] = true
+
+			err = storage.GetConn().SetMultiPlayer(b, p)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				log.Println(err.Error())
 				return
 			}
 		}
 	}
 
-	p.Points -= t.Deposit
-	t.Players[p.Id] = p
-
-	if err = storage.GetConn().SetPlayer(p); err != nil {
-		errorHandler(w, http.StatusInternalServerError, err.Error())
+	err = takePlayer(p, t.Deposit)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Println(err.Error())
+		return
 	}
 
+	err = storage.GetConn().SetPlayer(p)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Println(err.Error())
+		return
+	}
+
+	t.Players = append(t.Players, p.Id)
 	if err = storage.GetConn().SetTournament(t); err != nil {
-		errorHandler(w, http.StatusInternalServerError, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Println(err.Error())
+		return
 	}
 }
 
+//todo: Why without tournamentId? Why not delete tournament after resulting?
 func ResultTournamentHandler(w http.ResponseWriter, r *http.Request) {
-	if !methodAllowed(w, r, http.MethodPost) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -211,40 +249,54 @@ func ResultTournamentHandler(w http.ResponseWriter, r *http.Request) {
 
 	err := decoder.Decode(&tournamentResult)
 	if err != nil {
-		errorHandler(w, http.StatusInternalServerError, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Println(err.Error())
+		return
 	}
 
 	for _, winner := range tournamentResult.Winners {
 		p, err := storage.GetConn().GetPlayer(winner.PlayerId)
 		if err != nil {
-			errorHandler(w, http.StatusInternalServerError, err.Error())
+			w.WriteHeader(http.StatusInternalServerError)
+			log.Println(err.Error())
 			return
 		}
 
 		p.Points += winner.Prize
-		if err = storage.GetConn().SetPlayer(p); err != nil {
-			errorHandler(w, http.StatusInternalServerError, err.Error())
+		err = storage.GetConn().SetPlayer(p)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			log.Println(err.Error())
 			return
 		}
 
 		if len(p.Backers) > 0 {
+			// pay back in the same ratio
 			pointsPerBacker := winner.Prize / uint64(len(p.Backers) + 1)
 
-			for _, backerId := range p.Backers {
-				b, err := storage.GetConn().GetPlayer(backerId)
+			for backerId, _  := range p.Backers {
+
+				err = takePlayer(p, pointsPerBacker)
 				if err != nil {
-					errorHandler(w, http.StatusInternalServerError, err.Error())
+					w.WriteHeader(http.StatusInternalServerError)
+					log.Println(err.Error())
 					return
 				}
 
-				p.Backers = append(p.Backers, backerId)
+				b, err := storage.GetConn().GetPlayer(backerId)
+				if err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					log.Println(err.Error())
+					return
+				}
 
 				b.Points += pointsPerBacker
-				p.Points -= pointsPerBacker
+				delete(p.Backers, backerId)
 
-				err = storage.GetConn().SafeBack(p, b)
+				err = storage.GetConn().SetMultiPlayer(b, p)
 				if err != nil {
-					errorHandler(w, http.StatusInternalServerError, err.Error())
+					w.WriteHeader(http.StatusInternalServerError)
+					log.Println(err.Error())
 					return
 				}
 			}
@@ -253,49 +305,60 @@ func ResultTournamentHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func BalanceHandler(w http.ResponseWriter, r *http.Request) {
-	if !methodAllowed(w, r, http.MethodGet) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 
 	params := r.URL.Query()
-	playerId := params.Get("playerId")
+
+	playerId, err := utils.GetStringURLParam(params, "playerId")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		log.Println("invalid playerId given")
+		return
+	}
 
 	p, err := storage.GetConn().GetPlayer(playerId)
 	if err != nil {
-		errorHandler(w, http.StatusInternalServerError, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Println(err.Error())
 		return
 	}
 
 	j, err := json.Marshal(p)
 	if err != nil {
-		errorHandler(w, http.StatusInternalServerError, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Println(err.Error())
 		return
 	}
 
-	w.Write(j)
+	_, err = w.Write(j)
+	if err != nil {
+		log.Println(err.Error())
+	}
 }
 
 func ResetHandler(w http.ResponseWriter, r *http.Request) {
-	if !methodAllowed(w, r, http.MethodGet) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 
 	err := storage.GetConn().Reset()
 	if err != nil {
-		errorHandler(w, http.StatusInternalServerError, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Println(err.Error())
 	}
 }
 
-func errorHandler(w http.ResponseWriter, httpCode int, msg string)  {
-	w.WriteHeader(httpCode)
-	w.Write([]byte(msg))
-}
+func takePlayer(p *types.Player, points uint64) error {
 
-func methodAllowed(w http.ResponseWriter, r *http.Request, method string) bool {
-	if r.Method != method {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return false
+	if p.Points >= points {
+		p.Points -= points
+	} else {
+		return errors.New("not enough points to take")
 	}
 
-	return true
+	return nil
 }
