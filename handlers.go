@@ -127,6 +127,7 @@ func AnnounceTournamentHandler(w http.ResponseWriter, r *http.Request) {
 	t := &types.Tournament{
 		Id: tournamentId,
 		Deposit: deposit,
+		Players: make(map[string]bool),
 	}
 
 	if err = storage.GetConn().SetTournament(t); err != nil {
@@ -224,7 +225,7 @@ func JoinTournamentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	t.Players = append(t.Players, p.Id)
+	t.Players[p.Id] = true
 	if err = storage.GetConn().SetTournament(t); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Println(err.Error())
@@ -232,7 +233,6 @@ func JoinTournamentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-//todo: Why without tournamentId? Why not delete tournament after resulting?
 func ResultTournamentHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -241,6 +241,7 @@ func ResultTournamentHandler(w http.ResponseWriter, r *http.Request) {
 
 	decoder := json.NewDecoder(r.Body)
 	tournamentResult := struct {
+		TournamentId string `json:"tournamentId"`
 		Winners []struct{
 			PlayerId string `json:"playerId"`
 			Prize     uint64 `json:"prize"`
@@ -254,7 +255,27 @@ func ResultTournamentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if tournamentResult.TournamentId == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		log.Println("no tournament id provided")
+		return
+	}
+
+	t, err := storage.GetConn().GetTournament(tournamentResult.TournamentId)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Println(err.Error())
+		return
+	}
+
 	for _, winner := range tournamentResult.Winners {
+
+		if _, found := t.Players[winner.PlayerId]; !found {
+			w.WriteHeader(http.StatusBadRequest)
+			log.Println("no such player registered in the tournament")
+			return
+		}
+
 		p, err := storage.GetConn().GetPlayer(winner.PlayerId)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -301,6 +322,13 @@ func ResultTournamentHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+	}
+
+	err = storage.GetConn().DeleteTournament(tournamentResult.TournamentId)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Println(err.Error())
+		return
 	}
 }
 

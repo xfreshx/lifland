@@ -27,10 +27,10 @@ func (p *Player) FromBytes(val []byte) error {
 
 	return d.Decode(p)
 }
-
+пше
 type Tournament struct {
 	Id      string
-	Players []string
+	Players map[string]bool
 	Deposit uint64
 }
 

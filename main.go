@@ -36,7 +36,7 @@ func main() {
 	}
 
 	go func() {
-		if err := srv.ListenAndServe(); err != nil {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal("Unable to start server: " + err.Error())
 		}
 	}()
@@ -45,7 +45,6 @@ func main() {
 	signal.Notify(c, os.Interrupt)
 
 	<-c
-
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second * 15)
 	defer cancel()
