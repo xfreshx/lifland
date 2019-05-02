@@ -1,52 +1,53 @@
 package types
 
 import (
-	"bytes"
-	"encoding/gob"
+	"encoding/json"
+	"log"
 )
 
 type Player struct {
 	Id     string `json:"id"`
 	Points uint64 `json:"balance"`
-	Backers map[string]bool `json:"-"`
+	Backers map[string]interface{} `json:"-"`
 }
 
-func (p *Player) ToBytes() ([]byte, error) {
-	var b bytes.Buffer
-	e := gob.NewEncoder(&b)
-	if err := e.Encode(p); err != nil {
-		return nil, err
+func (p *Player) GetBackersJson() string {
+	b, err := json.Marshal(p.Backers)
+	if err != nil {
+		log.Println(err)
+		return ""
 	}
 
-	return b.Bytes(), nil
+	return string(b)
 }
 
-func (p *Player) FromBytes(val []byte) error {
-	b := bytes.NewBuffer(val)
-	d := gob.NewDecoder(b)
-
-	return d.Decode(p)
+func (p *Player) SetBackers(j string)  {
+	err := json.Unmarshal([]byte(j), &p.Backers)
+	if err != nil {
+		log.Println(err)
+	}
 }
-пше
+
 type Tournament struct {
 	Id      string
-	Players map[string]bool
+	Players map[string]interface{}
 	Deposit uint64
 }
 
-func (t *Tournament) ToBytes() ([]byte, error) {
-	var b bytes.Buffer
-	e := gob.NewEncoder(&b)
-	if err := e.Encode(t); err != nil {
-		return nil, err
+func (t *Tournament) GetPlayersJson() string {
+	b, err := json.Marshal(t.Players)
+	if err != nil {
+		log.Println(err)
+		return ""
 	}
 
-	return b.Bytes(), nil
+	return string(b)
 }
 
-func (t *Tournament) FromBytes(val []byte) error {
-	b := bytes.NewBuffer(val)
-	d := gob.NewDecoder(b)
-
-	return d.Decode(t)
+func (t *Tournament) SetPlayers(j string)  {
+	err := json.Unmarshal([]byte(j), &t.Players)
+	if err != nil {
+		log.Println(err)
+	}
 }
+

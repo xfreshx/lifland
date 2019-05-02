@@ -4,3 +4,12 @@ services:
     image: alikhosherstov/lifland
     ports:
       - "8080:8080"
+  db:
+    image: postgres
+    restart: always
+    environment:
+      POSTGRES_PASSWORD: "example"
+      POSTGRES_DB: "lifland"
+      POSTGRES_USER: "postgres"
+    ports:
+      - "5432:5432"

@@ -7,8 +7,11 @@ require (
 	github.com/dustin/go-humanize v1.0.0 // indirect
 	github.com/golang/protobuf v1.3.1 // indirect
 	github.com/gorilla/mux v1.7.1
+	github.com/lib/pq v1.1.0
 	github.com/pkg/errors v0.8.1 // indirect
+	github.com/rubenv/sql-migrate v0.0.0-20190327083759-54bad0a9b051
 	golang.org/x/net v0.0.0-20190420063019-afa5a82059c6 // indirect
 	golang.org/x/sys v0.0.0-20190419153524-e8e3143a4f4a // indirect
+	gopkg.in/gorp.v1 v1.7.2 // indirect
 
 )

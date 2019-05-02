@@ -11,7 +11,7 @@ import (
 )
 
 func RootHandler(w http.ResponseWriter, r *http.Request) {
-	w.Write([]byte(`Social tournament service. Please register players and start the tournament.`))
+	_, _ = w.Write([]byte(`Social tournament service. Please register players and start the tournament.`))
 }
 
 func TakeHandler(w http.ResponseWriter, r *http.Request) {
@@ -36,24 +36,35 @@ func TakeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p, err := storage.GetConn().GetPlayer(playerId)
+	commit := false
+	err = storage.GetConn().BeginTransaction()
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Println(err.Error())
+		return
+	}
+	defer storage.GetConn().FinalizeTransaction(&commit)
+
+	p, err := storage.GetConn().GetPlayersForUpdate([]string{playerId})
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Println(err.Error())
 		return
 	}
 
-	err = takePlayer(p, points)
+	err = takePlayer(p[0], points)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Println(err.Error())
 	}
 
-	if err = storage.GetConn().SetPlayer(p); err != nil {
+	if err = storage.GetConn().UpdatePlayer(p[0]); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Println(err.Error())
 		return
 	}
+
+	commit = true
 }
 
 func FundHandler(w http.ResponseWriter, r *http.Request) {
@@ -78,22 +89,11 @@ func FundHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p, err := storage.GetConn().GetPlayer(playerId)
-	if err != nil {
-		if err == storage.ErrNoPlayer {
-			p = &types.Player{
-				Id: playerId,
-				Backers: make(map[string]bool),
-			}
-			log.Println("no such player, will be created")
-		} else {
-			w.WriteHeader(http.StatusInternalServerError)
-			log.Println(err.Error())
-			return
-		}
+	p := &types.Player{
+		Id: playerId,
+		Points: points,
+		Backers: make(map[string]interface{}),
 	}
-
-	p.Points += points
 
 	if err = storage.GetConn().SetPlayer(p); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -127,7 +127,7 @@ func AnnounceTournamentHandler(w http.ResponseWriter, r *http.Request) {
 	t := &types.Tournament{
 		Id: tournamentId,
 		Deposit: deposit,
-		Players: make(map[string]bool),
+		Players: make(map[string]interface{}),
 	}
 
 	if err = storage.GetConn().SetTournament(t); err != nil {
@@ -158,21 +158,30 @@ func JoinTournamentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	t, err := storage.GetConn().GetTournament(tournamentId)
+	commit := false
+	err = storage.GetConn().BeginTransaction()
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Println(err.Error())
+		return
+	}
+	defer storage.GetConn().FinalizeTransaction(&commit)
+
+	t, err := storage.GetConn().GetTournamentForUpdate(tournamentId)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Println(err.Error())
 		return
 	}
 
-	p, err := storage.GetConn().GetPlayer(playerId)
+	p, err := storage.GetConn().GetPlayersForUpdate([]string{playerId})
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Println(err.Error())
 		return
 	}
 
-	if p.Points < t.Deposit {
+	if p[0].Points < t.Deposit {
 		backers, ok := params["backerId"]
 		if !ok {
 			w.WriteHeader(http.StatusBadRequest)
@@ -183,15 +192,14 @@ func JoinTournamentHandler(w http.ResponseWriter, r *http.Request) {
 		// share deposit among all backers + a player himself
 		pointsPerBacker := t.Deposit / uint64(len(backers) + 1)
 
-		for _, backerId := range backers {
+		backerPlayers, err := storage.GetConn().GetPlayersForUpdate(backers)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			log.Println(err.Error())
+			return
+		}
 
-			b, err := storage.GetConn().GetPlayer(backerId)
-			if err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-				log.Println(err.Error())
-				return
-			}
-
+		for _, b := range backerPlayers {
 			err = takePlayer(b, pointsPerBacker)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
@@ -199,10 +207,17 @@ func JoinTournamentHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			p.Points += pointsPerBacker
-			p.Backers[backerId] = true
+			p[0].Points += pointsPerBacker
+			p[0].Backers[b.Id] = true
 
-			err = storage.GetConn().SetMultiPlayer(b, p)
+			err = storage.GetConn().UpdatePlayer(p[0])
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				log.Println(err.Error())
+				return
+			}
+
+			err = storage.GetConn().UpdatePlayer(b)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
 				log.Println(err.Error())
@@ -211,26 +226,28 @@ func JoinTournamentHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	err = takePlayer(p, t.Deposit)
+	err = takePlayer(p[0], t.Deposit)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Println(err.Error())
 		return
 	}
 
-	err = storage.GetConn().SetPlayer(p)
+	err = storage.GetConn().UpdatePlayer(p[0])
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Println(err.Error())
 		return
 	}
 
-	t.Players[p.Id] = true
-	if err = storage.GetConn().SetTournament(t); err != nil {
+	t.Players[p[0].Id] = true
+	if err = storage.GetConn().UpdateTournament(t); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Println(err.Error())
 		return
 	}
+
+	commit = true
 }
 
 func ResultTournamentHandler(w http.ResponseWriter, r *http.Request) {
@@ -261,7 +278,16 @@ func ResultTournamentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	t, err := storage.GetConn().GetTournament(tournamentResult.TournamentId)
+	commit := false
+	err = storage.GetConn().BeginTransaction()
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Println(err.Error())
+		return
+	}
+	defer storage.GetConn().FinalizeTransaction(&commit)
+
+	t, err := storage.GetConn().GetTournamentForUpdate(tournamentResult.TournamentId)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Println(err.Error())
@@ -276,35 +302,40 @@ func ResultTournamentHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		p, err := storage.GetConn().GetPlayer(winner.PlayerId)
+		p, err := storage.GetConn().GetPlayersForUpdate([]string{winner.PlayerId})
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			log.Println(err.Error())
 			return
 		}
 
-		p.Points += winner.Prize
-		err = storage.GetConn().SetPlayer(p)
+		p[0].Points += winner.Prize
+		err = storage.GetConn().UpdatePlayer(p[0])
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			log.Println(err.Error())
 			return
 		}
 
-		if len(p.Backers) > 0 {
+		if len(p[0].Backers) > 0 {
 			// pay back in the same ratio
-			pointsPerBacker := winner.Prize / uint64(len(p.Backers) + 1)
+			pointsPerBacker := winner.Prize / uint64(len(p[0].Backers)+1)
 
-			for backerId, _  := range p.Backers {
+			var backersId []string
+			for backerId, _ := range p[0].Backers {
+				backersId = append(backersId, backerId)
+			}
 
-				err = takePlayer(p, pointsPerBacker)
-				if err != nil {
-					w.WriteHeader(http.StatusInternalServerError)
-					log.Println(err.Error())
-					return
-				}
+			backerPlayers, err := storage.GetConn().GetPlayersForUpdate(backersId)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				log.Println(err.Error())
+				return
+			}
 
-				b, err := storage.GetConn().GetPlayer(backerId)
+			for _, b := range backerPlayers {
+
+				err = takePlayer(p[0], pointsPerBacker)
 				if err != nil {
 					w.WriteHeader(http.StatusInternalServerError)
 					log.Println(err.Error())
@@ -312,15 +343,22 @@ func ResultTournamentHandler(w http.ResponseWriter, r *http.Request) {
 				}
 
 				b.Points += pointsPerBacker
-				delete(p.Backers, backerId)
+				delete(p[0].Backers, b.Id)
 
-				err = storage.GetConn().SetMultiPlayer(b, p)
+				err = storage.GetConn().UpdatePlayer(b)
 				if err != nil {
 					w.WriteHeader(http.StatusInternalServerError)
 					log.Println(err.Error())
 					return
 				}
 			}
+		}
+
+		err = storage.GetConn().UpdatePlayer(p[0])
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			log.Println(err.Error())
+			return
 		}
 	}
 

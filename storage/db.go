@@ -1,40 +1,49 @@
 package storage
 
 import (
-	"github.com/xfreshx/lifland/types"
-	"errors"
-	"github.com/dgraph-io/badger"
-	"log"
-	"os"
-	"sync"
+"database/sql"
+"errors"
+_ "github.com/lib/pq"
+"github.com/rubenv/sql-migrate"
+"github.com/xfreshx/lifland/types"
+"log"
+"os"
+"strings"
+"sync"
 )
+
+//TODO: go-bindata -pkg storage migrations/... must be included in a build process
 
 var s = &store{}
 var once sync.Once
 
-var ErrNoPlayer = errors.New("no such player")
-var ErrNoTournament = errors.New("no such tournament")
-
 type store struct {
-	db *badger.DB
+	db *sql.DB
 }
 
 func GetConn() *store {
 	once.Do(func() {
 
-		dbPath := os.Getenv("db")
-		if dbPath == "" {
-			dbPath = "/tmp/lifland"
+		dbConnStr := os.Getenv("db")
+		if dbConnStr == "" {
+			dbConnStr = "postgres://postgres:example@127.0.0.1:5432/lifland?sslmode=disable&connect_timeout=10"
 		}
 
-		opts := badger.DefaultOptions
-		opts.Dir = dbPath
-		opts.ValueDir = dbPath
-
 		var err error
-		s.db, err = badger.Open(opts)
+		s.db, err = sql.Open("postgres", dbConnStr)
 		if err != nil {
-			log.Fatal("Unable to open database file (%s): %v", dbPath, err)
+			log.Fatal("Unable to open database file: ", err)
+		}
+
+		migrations := &migrate.AssetMigrationSource{
+			Asset:    Asset,
+			AssetDir: AssetDir,
+			Dir:      "migrations",
+		}
+
+		_, err = migrate.Exec(s.db, "postgres", migrations, migrate.Up)
+		if err != nil {
+			log.Fatal("Unable to migrate: ", err)
 		}
 	})
 
@@ -46,73 +55,197 @@ func (s *store) Reset() error {
 		return errors.New("storage is not initialized")
 	}
 
-	return s.db.DropAll()
+	_, err := s.db.Exec("DELETE FROM players;")
+	if err != nil {
+		return err
+	}
+
+	_, err = s.db.Exec("DELETE FROM tournaments;")
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (s *store) Close() {
 	if s.db != nil {
-		s.db.Close()
+		_ = s.db.Close()
 	}
 }
 
 func (s *store) SetTournament(t *types.Tournament) error {
-	return s.db.Update(func(txn *badger.Txn) error {
-		b, err := t.ToBytes()
-		if err != nil {
-			return err
-		}
-
-		return txn.Set([]byte("tournament"+t.Id), b)
-	})
-}
-
-func (s *store) GetTournament(id string) (*types.Tournament, error) {
-	var t types.Tournament
-	err := s.db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get([]byte("tournament" + id))
-		if err != nil {
-			return err
-		}
-
-		val, err := item.ValueCopy(nil)
-		if err != nil {
-			return err
-		}
-
-		return t.FromBytes(val)
-	})
-
-	if err != nil && err == badger.ErrKeyNotFound {
-		err = ErrNoTournament
+	if s.db == nil {
+		return errors.New("storage is not initialized")
 	}
 
-	return &t, err
+	var commit bool
+
+	_, err := s.db.Exec("BEGIN;")
+	if err != nil {
+		return err
+	}
+	defer s.FinalizeTransaction(&commit)
+
+
+	stmt, err := s.db.Prepare(
+		`INSERT INTO tournaments (id, deposit, players) 
+			VALUES ($1, $2, $3) 
+			ON CONFLICT (id)
+			DO UPDATE 
+				SET deposit = EXCLUDED.deposit, players = EXCLUDED.players;`)
+	if err != nil {
+		return err
+	}
+
+	_, err = stmt.Exec(t.Id, t.Deposit, t.GetPlayersJson())
+	if err != nil {
+		return err
+	}
+
+	commit = true
+	return nil
+}
+
+func (s *store) GetTournamentForUpdate(id string) (*types.Tournament, error) {
+	var t types.Tournament
+
+	if s.db == nil {
+		return &t, errors.New("storage is not initialized")
+	}
+
+	stmt, err := s.db.Prepare("SELECT * FROM tournaments WHERE id = $1 FOR UPDATE;")
+	if err != nil {
+		return &t, err
+	}
+
+	playersStr := sql.NullString{}
+	err = stmt.QueryRow(id).Scan(&t.Id, &t.Deposit, &playersStr)
+	if err != nil {
+		return &t, err
+	}
+
+	t.SetPlayers(playersStr.String)
+
+	return &t, nil
+}
+
+func (s *store) UpdateTournament(t *types.Tournament) error {
+	if s.db == nil {
+		return errors.New("storage is not initialized")
+	}
+
+	stmt, err := s.db.Prepare(`UPDATE tournaments SET deposit = $2, players = $3 WHERE id = $1;`)
+	if err != nil {
+		return err
+	}
+
+	_, err = stmt.Exec(t.Id, t.Deposit, t.GetPlayersJson())
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (s *store) DeleteTournament(id string) error {
-	return s.db.Update(func(txn *badger.Txn) error {
-		return txn.Delete([]byte("tournament"+id))
-	})
-}
-
-func (s *store) SetMultiPlayer(pp ...*types.Player) error {
-	txn := s.db.NewTransaction(true)
-	defer txn.Discard()
-
-
-	for _, p := range pp {
-		b, err := p.ToBytes()
-		if err != nil {
-			return err
-		}
-
-		err = txn.Set([]byte("player"+p.Id), b)
-		if err != nil {
-			return err
-		}
+	if s.db == nil {
+		return errors.New("storage is not initialized")
 	}
 
-	if err := txn.Commit(); err != nil {
+	var commit bool
+	_, err := s.db.Exec("BEGIN;")
+	if err != nil {
+		return err
+	}
+	defer s.FinalizeTransaction(&commit)
+
+	stmt, err := s.db.Prepare("DELETE FROM tournaments WHERE id = $1;")
+	if err != nil {
+		return err
+	}
+
+	_, err = stmt.Exec(id)
+	if err != nil {
+		return err
+	}
+
+	commit = true
+	return nil
+}
+
+func (s *store) GetPlayersForUpdate(ids []string) ([]*types.Player, error) {
+	pp := []*types.Player{}
+
+	if s.db == nil {
+		return pp, errors.New("storage is not initialized")
+	}
+
+	stmt, err := s.db.Prepare("SELECT * FROM players WHERE id = ANY($1::text[]) FOR UPDATE;")
+	if err != nil {
+		return pp, err
+	}
+
+	params := "{" + strings.Join(ids, ",") + "}"
+
+	rows, err := stmt.Query(params)
+	if err != nil {
+		return pp, err
+	}
+
+	for rows.Next() {
+		p := new(types.Player)
+
+		backersStr := sql.NullString{}
+		err = rows.Scan(&p.Id, &p.Points, &backersStr)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+
+		p.SetBackers(backersStr.String)
+
+		pp = append(pp, p)
+	}
+
+	return pp, nil
+}
+
+func (s *store) GetPlayer(id string) (*types.Player, error) {
+	var p types.Player
+
+	if s.db == nil {
+		return &p, errors.New("storage is not initialized")
+	}
+
+	stmt, err := s.db.Prepare("SELECT * FROM players WHERE id = $1;")
+	if err != nil {
+		return &p, err
+	}
+
+	backersStr := sql.NullString{}
+	err = stmt.QueryRow(id).Scan(&p.Id, &p.Points, &backersStr)
+	if err != nil {
+		return &p, err
+	}
+
+	p.SetBackers(backersStr.String)
+
+	return &p, err
+}
+
+func (s *store) UpdatePlayer(p *types.Player) error {
+	if s.db == nil {
+		return errors.New("storage is not initialized")
+	}
+
+	stmt, err := s.db.Prepare(`UPDATE players SET points = $2, backers = $3 WHERE id = $1;`)
+	if err != nil {
+		return err
+	}
+
+	_, err = stmt.Exec(p.Id, p.Points, p.GetBackersJson())
+	if err != nil {
 		return err
 	}
 
@@ -120,35 +253,61 @@ func (s *store) SetMultiPlayer(pp ...*types.Player) error {
 }
 
 func (s *store) SetPlayer(p *types.Player) error {
-	return s.db.Update(func(txn *badger.Txn) error {
-		b, err := p.ToBytes()
-		if err != nil {
-			return err
-		}
-
-		return txn.Set([]byte("player"+p.Id), b)
-	})
-}
-
-func (s *store) GetPlayer(id string) (*types.Player, error) {
-	var p types.Player
-	err := s.db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get([]byte("player" + id))
-		if err != nil {
-			return err
-		}
-
-		val, err := item.ValueCopy(nil)
-		if err != nil {
-			return err
-		}
-
-		return p.FromBytes(val)
-	})
-
-	if err != nil && err == badger.ErrKeyNotFound {
-		err = ErrNoPlayer
+	if s.db == nil {
+		return errors.New("storage is not initialized")
 	}
 
-	return &p, err
+	var commit bool
+
+	_, err := s.db.Exec("BEGIN;")
+	if err != nil {
+		return err
+	}
+	defer s.FinalizeTransaction(&commit)
+
+
+	stmt, err := s.db.Prepare(
+		`INSERT INTO players (id, points, backers) 
+			VALUES ($1, $2, $3) 
+			ON CONFLICT (id)
+			DO UPDATE 
+				SET points = players.points + EXCLUDED.points, backers = EXCLUDED.backers;`)
+	if err != nil {
+		return err
+	}
+
+	_, err = stmt.Exec(p.Id, p.Points, p.GetBackersJson())
+	if err != nil {
+		return err
+	}
+
+	commit = true
+	return nil
+}
+
+
+func (s *store) BeginTransaction() error {
+	if s.db == nil {
+		return errors.New("storage is not initialized")
+	}
+
+	_, err := s.db.Exec("BEGIN;")
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func  (s *store) FinalizeTransaction(commit *bool) {
+	var err error
+	if *commit {
+		_, err = s.db.Exec("COMMIT;")
+	} else {
+		_, err = s.db.Exec("ROLLBACK;")
+	}
+
+	if err != nil {
+		log.Println(err)
+	}
 }
