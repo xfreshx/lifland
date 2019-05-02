@@ -6,8 +6,8 @@ import (
 )
 
 type Player struct {
-	Id     string `json:"id"`
-	Points uint64 `json:"balance"`
+	Id      string                 `json:"id"`
+	Points  uint64                 `json:"balance"`
 	Backers map[string]interface{} `json:"-"`
 }
 
@@ -21,7 +21,7 @@ func (p *Player) GetBackersJson() string {
 	return string(b)
 }
 
-func (p *Player) SetBackers(j string)  {
+func (p *Player) SetBackers(j string) {
 	err := json.Unmarshal([]byte(j), &p.Backers)
 	if err != nil {
 		log.Println(err)
@@ -44,10 +44,9 @@ func (t *Tournament) GetPlayersJson() string {
 	return string(b)
 }
 
-func (t *Tournament) SetPlayers(j string)  {
+func (t *Tournament) SetPlayers(j string) {
 	err := json.Unmarshal([]byte(j), &t.Players)
 	if err != nil {
 		log.Println(err)
 	}
 }
-

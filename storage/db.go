@@ -1,15 +1,15 @@
 package storage
 
 import (
-"database/sql"
-"errors"
-_ "github.com/lib/pq"
-"github.com/rubenv/sql-migrate"
-"github.com/xfreshx/lifland/types"
-"log"
-"os"
-"strings"
-"sync"
+	"database/sql"
+	"errors"
+	_ "github.com/lib/pq"
+	"github.com/rubenv/sql-migrate"
+	"github.com/xfreshx/lifland/types"
+	"log"
+	"os"
+	"strings"
+	"sync"
 )
 
 //TODO: go-bindata -pkg storage migrations/... must be included in a build process
@@ -87,7 +87,6 @@ func (s *store) SetTournament(t *types.Tournament) error {
 	}
 	defer s.FinalizeTransaction(&commit)
 
-
 	stmt, err := s.db.Prepare(
 		`INSERT INTO tournaments (id, deposit, players) 
 			VALUES ($1, $2, $3) 
@@ -153,13 +152,6 @@ func (s *store) DeleteTournament(id string) error {
 		return errors.New("storage is not initialized")
 	}
 
-	var commit bool
-	_, err := s.db.Exec("BEGIN;")
-	if err != nil {
-		return err
-	}
-	defer s.FinalizeTransaction(&commit)
-
 	stmt, err := s.db.Prepare("DELETE FROM tournaments WHERE id = $1;")
 	if err != nil {
 		return err
@@ -170,7 +162,6 @@ func (s *store) DeleteTournament(id string) error {
 		return err
 	}
 
-	commit = true
 	return nil
 }
 
@@ -265,7 +256,6 @@ func (s *store) SetPlayer(p *types.Player) error {
 	}
 	defer s.FinalizeTransaction(&commit)
 
-
 	stmt, err := s.db.Prepare(
 		`INSERT INTO players (id, points, backers) 
 			VALUES ($1, $2, $3) 
@@ -285,7 +275,6 @@ func (s *store) SetPlayer(p *types.Player) error {
 	return nil
 }
 
-
 func (s *store) BeginTransaction() error {
 	if s.db == nil {
 		return errors.New("storage is not initialized")
@@ -299,7 +288,7 @@ func (s *store) BeginTransaction() error {
 	return nil
 }
 
-func  (s *store) FinalizeTransaction(commit *bool) {
+func (s *store) FinalizeTransaction(commit *bool) {
 	var err error
 	if *commit {
 		_, err = s.db.Exec("COMMIT;")

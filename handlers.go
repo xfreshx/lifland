@@ -1,11 +1,11 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"github.com/xfreshx/lifland/storage"
 	"github.com/xfreshx/lifland/types"
 	"github.com/xfreshx/lifland/utils"
-	"encoding/json"
-	"errors"
 	"log"
 	"net/http"
 )
@@ -90,8 +90,8 @@ func FundHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	p := &types.Player{
-		Id: playerId,
-		Points: points,
+		Id:      playerId,
+		Points:  points,
 		Backers: make(map[string]interface{}),
 	}
 
@@ -125,7 +125,7 @@ func AnnounceTournamentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	t := &types.Tournament{
-		Id: tournamentId,
+		Id:      tournamentId,
 		Deposit: deposit,
 		Players: make(map[string]interface{}),
 	}
@@ -190,7 +190,7 @@ func JoinTournamentHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// share deposit among all backers + a player himself
-		pointsPerBacker := t.Deposit / uint64(len(backers) + 1)
+		pointsPerBacker := t.Deposit / uint64(len(backers)+1)
 
 		backerPlayers, err := storage.GetConn().GetPlayersForUpdate(backers)
 		if err != nil {
@@ -259,9 +259,9 @@ func ResultTournamentHandler(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	tournamentResult := struct {
 		TournamentId string `json:"tournamentId"`
-		Winners []struct{
+		Winners      []struct {
 			PlayerId string `json:"playerId"`
-			Prize     uint64 `json:"prize"`
+			Prize    uint64 `json:"prize"`
 		} `json:"winners"`
 	}{}
 
@@ -368,6 +368,8 @@ func ResultTournamentHandler(w http.ResponseWriter, r *http.Request) {
 		log.Println(err.Error())
 		return
 	}
+
+	commit = true
 }
 
 func BalanceHandler(w http.ResponseWriter, r *http.Request) {
