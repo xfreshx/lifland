@@ -4,6 +4,8 @@ services:
     image: alikhosherstov/lifland
     ports:
       - "8080:8080"
+    environment:
+      db: "postgres://postgres:example@db:5432/lifland?sslmode=disable&connect_timeout=10"
   db:
     image: postgres
     restart: always
